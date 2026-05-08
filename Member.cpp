@@ -29,7 +29,7 @@ Member::~Member() {
 
 // ─── Overrides ────────────────────────────────────────────────────────────────
 
-// Incorporates the dashboard display pattern from baap_code.cpp
+// Incorporates the dashboard display pattern from rev_mem.cpp
 void Member::displayDashboard() const {
     cout << "===== Member Dashboard =====\n";
     cout << "User ID : " << id << "\n";
@@ -46,7 +46,7 @@ string Member::getRole() const { return "MEMBER"; }
 
 // ─── Balance ──────────────────────────────────────────────────────────────────
 
-// depositAmount — validation logic taken directly from baap_code.cpp
+// depositAmount — validation logic taken directly from rev_mem.cpp
 void Member::depositAmount(double amount) {
     if (amount <= 0)
         throw invalid_argument("Deposit amount must be greater than zero.");
@@ -71,7 +71,7 @@ void Member::deductBalance(double amount) {
 
 // ─── Borrow management ────────────────────────────────────────────────────────
 
-// issueBook — core logic from baap_code.cpp, adapted:
+// issueBook — core logic from rev_mem.cpp, adapted:
 //   • Checks daily borrow limit (throws BorrowLimitException if >= 2 today)
 //   • Uses 14-day borrow period instead of 7
 //   • Passes member ID to BorrowRecord (required for file persistence in PR 5)
@@ -105,7 +105,7 @@ void Member::returnBook(const string& isbn) {
          << "\". Admin will complete the process.\n";
 }
 
-// reserveBook — availability check from baap_code.cpp; adapted to use addToReservation
+// reserveBook — availability check from rev_mem.cpp; adapted to use addToReservation
 void Member::reserveBook(LibraryResource* r) {
     if (r->isAvailable()) {
         cout << "\"" << r->getTitle() << "\" is available — just issue it.\n";
