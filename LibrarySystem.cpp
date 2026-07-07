@@ -5,10 +5,19 @@
 #include <fstream> //save loa data from files
 #include <sstream>
 #include <algorithm>
-#include <direct.h>   // _mkdir for Windows/MinGW
+#include <direct.h>
 using namespace std;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Color codes ───────────────────────────────────────────────────────────────
+#define RST "\033[0m"
+#define RED "\033[31m"
+#define GRN "\033[32m"
+#define YLW "\033[33m"
+#define BLU "\033[34m"
+#define MAG "\033[35m"
+#define CYN "\033[36m"
+
+// ── String helpers ────────────────────────────────────────────────────────────
 
 static string toLower(const string& s) {
     string r = s;
@@ -20,7 +29,6 @@ static bool contains(const string& field, const string& query) {
     return toLower(field).find(toLower(query)) != string::npos;
 }
 
-// Split a pipe-delimited line into tokens
 static vector<string> split(const string& line) {
     vector<string> tokens;
     stringstream ss(line);
@@ -28,6 +36,8 @@ static vector<string> split(const string& line) {
     while (getline(ss, token, '|')) tokens.push_back(token);
     return tokens;
 }
+
+// ── Enum converters ───────────────────────────────────────────────────────────
 
 static string categoryStr(BookCategory c) {
     return c == BookCategory::FICTION ? "FICTION" : "NON_FICTION";
@@ -46,7 +56,7 @@ static MembershipStatus statusFromStr(const string& s) {
     return STANDARD;
 }
 
-// ── Input helpers (used throughout menus and first-run setup) ─────────────────
+// ── Input helpers ─────────────────────────────────────────────────────────────
 
 static int readInt(const string& prompt) {
     int n;
@@ -55,7 +65,7 @@ static int readInt(const string& prompt) {
         if (cin >> n) { cin.ignore(10000, '\n'); return n; }
         cin.clear();
         cin.ignore(10000, '\n');
-        cout << "Invalid input. Please enter a number: ";
+        cout << RED "Invalid input. Enter a number: " RST;
     }
 }
 
@@ -67,11 +77,75 @@ static string readLine(const string& prompt) {
     return s;
 }
 
-static void printResults(const vector<LibraryResource*>& results, const string& query) {
+static string readEmail(const string& prompt) {
+    while (true) {
+        string s = readLine(prompt);
+        if (s.find('@') != string::npos) return s;
+        cout << RED "Invalid email - must contain '@'. Try again.\n" RST;
+    }
+}
+
+// ── Display helpers ───────────────────────────────────────────────────────────
+
+static void printResourceList(const vector<LibraryResource*>& results, const string& query) {
     if (results.empty())
-        cout << "No resources found matching '" << query << "'.\n";
+        cout << RED "No resources found matching '" RST << query << RED "'.\n" RST;
     else
         for (LibraryResource* r : results) r->displayinfo();
+}
+
+static void showMemberDetails(Member* m) {
+    int active = 0, total = (int)m->getBorrowedBooks().size();
+    for (BorrowRecord* r : m->getBorrowedBooks())
+        if (!r->getIsReturned()) active++;
+
+    cout << YLW "\n--- Member Details ---\n" RST;
+    cout << BLU "ID      : " RST << m->getId()        << "\n";
+    cout << BLU "Name    : " RST << m->getFirstName() << " " << m->getLastName() << "\n";
+    cout << BLU "Email   : " RST << m->getEmail()     << "\n";
+    cout << BLU "Address : " RST << m->getAddress()   << "\n";
+    cout << BLU "Balance : " RST << "PKR " << m->getBalance() << "\n";
+    cout << BLU "Status  : " RST << statusStr(m->getStatus()) << "\n";
+    cout << BLU "Borrows : " RST << active << " active, " << total << " total\n";
+}
+
+static void showResourceDetails(LibraryResource* r) {
+    cout << YLW "\n--- Resource Details ---\n" RST;
+    cout << BLU "ISBN     : " RST << r->getIsbn()            << "\n";
+    cout << BLU "Title    : " RST << r->getTitle()           << "\n";
+    cout << BLU "Author   : " RST << r->getWriter()          << "\n";
+    cout << BLU "Year     : " RST << r->getPublicationYear() << "\n";
+    cout << BLU "Origin   : " RST << r->getOrigin()          << "\n";
+    cout << BLU "Language : " RST << r->getLanguage()        << "\n";
+    cout << BLU "Genre    : " RST << r->getGenre()           << "\n";
+    cout << BLU "Type     : " RST << r->getType()            << "\n";
+    cout << BLU "Available: " RST << (r->isAvailable() ? "Yes" : "No") << "\n";
+
+    string type = r->getType();
+    if (type == "SCIENCE")
+        cout << BLU "Field    : " RST << dynamic_cast<ScienceBook*>(r)->getScientificField() << "\n";
+    else if (type == "LITERATURE")
+        cout << BLU "Era      : " RST << dynamic_cast<LiteratureBook*>(r)->getLiteraryEra() << "\n";
+    else if (type == "MAGAZINE") {
+        cout << BLU "Issue No : " RST << dynamic_cast<Magazine*>(r)->getIssueNumber()      << "\n";
+        cout << BLU "Month    : " RST << dynamic_cast<Magazine*>(r)->getPublicationMonth() << "\n";
+    }
+    else if (type == "REFERENCE")
+        cout << BLU "Edition  : " RST << dynamic_cast<ReferenceBook*>(r)->getEdition() << "\n";
+    else if (type == "DIGITAL") {
+        cout << BLU "Runtime  : " RST << dynamic_cast<DigitalMedia*>(r)->getRunTimeMinutes() << " min\n";
+        cout << BLU "Format   : " RST << dynamic_cast<DigitalMedia*>(r)->getFileFormat()     << "\n";
+    }
+
+    const auto& reviews = r->getReviews();
+    int approvedCount = 0;
+    for (const Review& rv : reviews) if (rv.isApproved()) approvedCount++;
+    if (approvedCount > 0) {
+        cout << BLU "Reviews  : " RST << approvedCount << " approved review(s)\n";
+        for (const Review& rv : reviews)
+            if (rv.isApproved())
+                cout << "  [" << rv.getRating() << "/5] " << rv.getComment() << "\n";
+    }
 }
 
 // ── Constructor / Destructor ──────────────────────────────────────────────────
@@ -79,7 +153,7 @@ static void printResults(const vector<LibraryResource*>& results, const string& 
 LibrarySystem::LibrarySystem() : currentUser(nullptr) {}
 
 LibrarySystem::~LibrarySystem() {
-    for (User* u           : users)     delete u;
+    for (User* u            : users)     delete u;
     for (LibraryResource* r : resources) delete r;
 }
 
@@ -87,7 +161,7 @@ LibrarySystem::~LibrarySystem() {
 
 bool LibrarySystem::addUser(User* u) {
     if (findUser(u->getId())) {
-        cout << "User ID " << u->getId() << " already exists.\n";
+        cout << RED "User ID " RST << u->getId() << RED " already exists.\n" RST;
         delete u;
         return false;
     }
@@ -103,7 +177,7 @@ void LibrarySystem::removeUser(const string& id) {
             return;
         }
     }
-    cout << "User " << id << " not found.\n";
+    cout << RED "User " RST << id << RED " not found.\n" RST;
 }
 
 User* LibrarySystem::findUser(const string& id) const {
@@ -128,16 +202,21 @@ vector<Member*> LibrarySystem::getAllMembers() const {
 }
 
 void LibrarySystem::displayAllUsers() const {
+    if (users.empty()) { cout << YLW "No users registered.\n" RST; return; }
     for (User* u : users)
-        cout << "  [" << u->getRole() << "] " << u->getId()
-             << " — " << u->getFirstName() << " " << u->getLastName() << "\n";
+        cout << CYN "[" RST << u->getRole() << CYN "] " RST
+             << u->getId() << " - " << u->getFirstName() << " " << u->getLastName() << "\n";
 }
 
 // ── Resource management ───────────────────────────────────────────────────────
 
 bool LibrarySystem::addResource(LibraryResource* r) {
-    if (findResource(r->getIsbn())) {
-        cout << "ISBN " << r->getIsbn() << " already exists.\n";
+    LibraryResource* existing = findResource(r->getIsbn());
+    if (existing) {
+        cout << RED "ISBN " RST << r->getIsbn()
+             << RED " is already registered to \"" RST << existing->getTitle()
+             << RED "\" (" RST << existing->getType() << RED ").\n" RST;
+        cout << YLW "Each edition or format must have its own unique ISBN.\n" RST;
         delete r;
         return false;
     }
@@ -149,16 +228,17 @@ void LibrarySystem::removeResource(const string& isbn) {
     for (int i = 0; i < (int)resources.size(); i++) {
         if (resources[i]->getIsbn() == isbn) {
             if (!resources[i]->isAvailable()) {
-                cout << "Cannot remove \"" << resources[i]->getTitle()
-                     << "\" — it is currently issued.\n";
+                cout << RED "Cannot remove \"" RST << resources[i]->getTitle()
+                     << RED "\" - it is currently issued.\n" RST;
                 return;
             }
             delete resources[i];
             resources.erase(resources.begin() + i);
+            cout << GRN "Resource removed.\n" RST;
             return;
         }
     }
-    cout << "Resource " << isbn << " not found.\n";
+    cout << RED "Resource " RST << isbn << RED " not found.\n" RST;
 }
 
 LibraryResource* LibrarySystem::findResource(const string& isbn) const {
@@ -171,11 +251,11 @@ void LibrarySystem::showAvailableResources() const {
     bool any = false;
     for (LibraryResource* r : resources)
         if (r->isAvailable()) { r->displayinfo(); any = true; }
-    if (!any) cout << "No resources currently available.\n";
+    if (!any) cout << YLW "No resources currently available.\n" RST;
 }
 
 void LibrarySystem::showAllResources() const {
-    if (resources.empty()) { cout << "No resources in the library.\n"; return; }
+    if (resources.empty()) { cout << YLW "No resources in the library.\n" RST; return; }
     for (LibraryResource* r : resources) r->displayinfo();
 }
 
@@ -216,7 +296,6 @@ vector<LibraryResource*> LibrarySystem::searchByYear(int year) const {
     return res;
 }
 
-// Uses LibraryResource::operator== for keyword search across isbn/title/writer/genre
 vector<LibraryResource*> LibrarySystem::searchByKeyword(const string& kw) const {
     vector<LibraryResource*> res;
     for (LibraryResource* r : resources)
@@ -224,7 +303,7 @@ vector<LibraryResource*> LibrarySystem::searchByKeyword(const string& kw) const 
     return res;
 }
 
-// ── File I/O — plain fstream, pipe-delimited text files ───────────────────────
+// ── File I/O ──────────────────────────────────────────────────────────────────
 
 bool LibrarySystem::dataFilesExist() const {
     ifstream f("data/users.txt");
@@ -232,7 +311,7 @@ bool LibrarySystem::dataFilesExist() const {
 }
 
 void LibrarySystem::ensureDataFolder() const {
-    _mkdir("data"); // no-op if folder already exists
+    _mkdir("data");
 }
 
 // Format: MEMBER|id|firstName|lastName|password|email|address|balance|status
@@ -242,14 +321,14 @@ void LibrarySystem::saveUsers(const string& filename) const {
     for (User* u : users) {
         if (u->getRole() == "MEMBER") {
             Member* m = dynamic_cast<Member*>(u);
-            f << "MEMBER|" << m->getId() << "|" << m->getFirstName() << "|"
-              << m->getLastName() << "|" << m->getPassword() << "|"
-              << m->getEmail() << "|" << m->getAddress()
-              << "|" << m->getBalance() << "|" << statusStr(m->getStatus()) << "\n";
+            f << "MEMBER|" << m->getId()        << "|" << m->getFirstName() << "|"
+              << m->getLastName()                << "|" << m->getPassword()  << "|"
+              << m->getEmail()                   << "|" << m->getAddress()   << "|"
+              << m->getBalance()                 << "|" << statusStr(m->getStatus()) << "\n";
         } else {
-            f << "ADMIN|" << u->getId() << "|" << u->getFirstName() << "|"
-              << u->getLastName() << "|" << u->getPassword() << "|"
-              << u->getEmail() << "|" << u->getAddress() << "\n";
+            f << "ADMIN|"  << u->getId()         << "|" << u->getFirstName() << "|"
+              << u->getLastName()                 << "|" << u->getPassword()  << "|"
+              << u->getEmail()                    << "|" << u->getAddress()   << "\n";
         }
     }
 }
@@ -276,11 +355,11 @@ void LibrarySystem::loadUsers(const string& filename) {
 void LibrarySystem::saveResources(const string& filename) const {
     ofstream f(filename);
     for (LibraryResource* r : resources) {
-        f << r->getType() << "|" << r->getIsbn() << "|" << r->getTitle() << "|"
-          << r->getWriter() << "|" << r->getPublicationYear() << "|"
-          << r->getOrigin() << "|" << r->getLanguage() << "|"
-          << r->getGenre() << "|" << categoryStr(r->getCategory()) << "|"
-          << (r->isAvailable() ? "1" : "0");
+        f << r->getType()            << "|" << r->getIsbn()            << "|"
+          << r->getTitle()           << "|" << r->getWriter()          << "|"
+          << r->getPublicationYear() << "|" << r->getOrigin()          << "|"
+          << r->getLanguage()        << "|" << r->getGenre()           << "|"
+          << categoryStr(r->getCategory()) << "|" << (r->isAvailable() ? "1" : "0");
 
         string type = r->getType();
         if (type == "SCIENCE")
@@ -307,12 +386,12 @@ void LibrarySystem::loadResources(const string& filename) {
         if (line.empty()) continue;
         vector<string> t = split(line);
         if (t.size() < 10) continue;
-        string type = t[0];
         string isbn = t[1], title = t[2], writer = t[3];
         int    year = stoi(t[4]);
         string origin = t[5], language = t[6], genre = t[7];
         BookCategory cat = categoryFromStr(t[8]);
         bool avail = (t[9] == "1");
+        string type = t[0];
 
         LibraryResource* r = nullptr;
         if      (type == "SCIENCE"    && t.size() >= 11)
@@ -326,10 +405,7 @@ void LibrarySystem::loadResources(const string& filename) {
         else if (type == "DIGITAL"    && t.size() >= 12)
             r = new DigitalMedia(isbn, title, writer, year, origin, language, genre, cat, stof(t[10]), t[11]);
 
-        if (r) {
-            r->setAvailable(avail);
-            resources.push_back(r);
-        }
+        if (r) { r->setAvailable(avail); resources.push_back(r); }
     }
 }
 
@@ -340,12 +416,12 @@ void LibrarySystem::saveBorrows(const string& filename) const {
         Member* m = dynamic_cast<Member*>(u);
         if (!m) continue;
         for (BorrowRecord* rec : m->getBorrowedBooks()) {
-            f << m->getId() << "|"
-              << rec->getResource()->getIsbn() << "|"
-              << rec->getIssueDate() << "|"
-              << rec->getDueDate()   << "|"
-              << (rec->getIsReturned() ? "1" : "0") << "|"
-              << rec->getReturnDate() << "\n";
+            f << m->getId()                          << "|"
+              << rec->getResource()->getIsbn()        << "|"
+              << rec->getIssueDate()                  << "|"
+              << rec->getDueDate()                    << "|"
+              << (rec->getIsReturned() ? "1" : "0")  << "|"
+              << rec->getReturnDate()                 << "\n";
         }
     }
 }
@@ -361,7 +437,6 @@ void LibrarySystem::loadBorrows(const string& filename) {
         Member*          m   = dynamic_cast<Member*>(findUser(t[0]));
         LibraryResource* res = findResource(t[1]);
         if (!m || !res) continue;
-
         BorrowRecord* rec = new BorrowRecord(t[0], res, stoll(t[2]), stoll(t[3]));
         rec->setIsReturned(t[4] == "1");
         rec->setReturnDate(stoll(t[5]));
@@ -373,10 +448,7 @@ void LibrarySystem::loadBorrows(const string& filename) {
 
 void LibrarySystem::loadAllData() {
     ensureDataFolder();
-    if (!dataFilesExist()) {
-        seedDefaultData();
-        return;
-    }
+    if (!dataFilesExist()) { seedDefaultData(); return; }
     loadUsers("data/users.txt");
     loadResources("data/resources.txt");
     loadBorrows("data/borrows.txt");
@@ -392,22 +464,21 @@ void LibrarySystem::saveAllData() const {
 // ── Seed data (first run only) ────────────────────────────────────────────────
 
 void LibrarySystem::seedDefaultData() {
-    cout << "\n==============================\n";
-    cout << "  WELCOME — FIRST TIME SETUP\n";
-    cout << "==============================\n";
-    cout << "No accounts found. Please create the Admin account.\n\n";
+    cout << YLW "\n==============================\n" RST;
+    cout << BLU "  WELCOME - FIRST TIME SETUP\n" RST;
+    cout << YLW "==============================\n" RST;
+    cout << RED "No accounts found. Please create the Admin account.\n\n" RST;
 
-    string id    = readLine("Admin ID       : ");
-    string first = readLine("First Name     : ");
-    string last  = readLine("Last Name      : ");
-    string pass  = readLine("Password       : ");
-    string email = readLine("Email          : ");
-    string addr  = readLine("Address        : ");
+    string id    = readLine(MAG "Admin ID    : " RST);
+    string first = readLine(MAG "First Name  : " RST);
+    string last  = readLine(MAG "Last Name   : " RST);
+    string pass  = readLine(MAG "Password    : " RST);
+    string email = readEmail(MAG "Email       : " RST);
+    string addr  = readLine(MAG "Address     : " RST);
 
     users.push_back(new Admin(id, first, last, pass, email, addr));
-    cout << "\nAdmin account created successfully.\n";
+    cout << GRN "\nAdmin account created successfully.\n" RST;
 
-    // Add 3 sample resources so the library is not empty on first run
     resources.push_back(new ScienceBook("S001", "Introduction to Physics", "Halliday",
                                          2020, "USA", "English", "Physics",
                                          BookCategory::NON_FICTION, "Mechanics"));
@@ -417,399 +488,634 @@ void LibrarySystem::seedDefaultData() {
     resources.push_back(new Magazine("M001", "Science Today", "Staff",
                                       2024, "USA", "English", "Science",
                                       BookCategory::NON_FICTION, 5, "April"));
-    cout << "3 sample resources added to the library.\n";
-    cout << "You can now log in as Admin to manage the system.\n";
+    cout << GRN "3 sample resources added. You can now log in as Admin.\n" RST;
     saveAllData();
 }
 
-// ── getAllResources ───────────────────────────────────────────────────────────
+vector<LibraryResource*> LibrarySystem::getAllResources() const { return resources; }
 
-vector<LibraryResource*> LibrarySystem::getAllResources() const {
-    return resources;
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// run() — main application loop
-// ═════════════════════════════════════════════════════════════════════════════
+// =============================================================================
+// run()
+// =============================================================================
 
 void LibrarySystem::run() {
     loadAllData();
 
     while (true) {
-        cout << "\n==============================\n";
-        cout << "  LIBRARY MANAGEMENT SYSTEM\n";
-        cout << "==============================\n";
-        cout << "[1] Admin Login\n";
-        cout << "[2] Member Login\n";
-        cout << "[3] Exit\n";
-        int choice = readInt("Enter choice: ");
+        cout << YLW "\n==============================\n" RST;
+        cout << BLU "  LIBRARY MANAGEMENT SYSTEM\n" RST;
+        cout << YLW "==============================\n" RST;
+        cout << CYN "[1] Admin Login\n" RST;
+        cout << CYN "[2] Member Login\n" RST;
+        cout << CYN "[3] Exit\n" RST;
+        int choice = readInt(MAG "Enter choice: " RST);
 
         if      (choice == 1) loginMenu("ADMIN");
         else if (choice == 2) loginMenu("MEMBER");
         else if (choice == 3) break;
-        else cout << "Invalid choice, try again.\n";
+        else cout << RED "Invalid choice.\n" RST;
     }
 
     saveAllData();
-    cout << "Data saved. Goodbye!\n";
+    cout << GRN "Data saved. Goodbye!\n" RST;
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// loginMenu() — prompts for credentials and dispatches to member/admin menu
-// ═════════════════════════════════════════════════════════════════════════════
+// =============================================================================
+// loginMenu()
+// =============================================================================
 
 void LibrarySystem::loginMenu(const string& role) {
-    cout << "\n--- " << role << " LOGIN ---\n";
-    string id   = readLine("Enter ID      : ");
-    string pass = readLine("Enter Password: ");
+    cout << YLW "\n--- " RST << role << YLW " LOGIN ---\n" RST;
+    string id   = readLine(MAG "ID       : " RST);
+    string pass = readLine(MAG "Password : " RST);
 
     User* u = loginCheck(id, pass);
-    if (!u) { cout << "Invalid credentials.\n"; return; }
+    if (!u) { cout << RED "Invalid credentials.\n" RST; return; }
 
-    // Reject if the account role does not match the selected portal
     if (u->getRole() != role) {
-        cout << "This ID is not registered as a " << role << ".\n";
+        cout << RED "This ID is not registered as " RST << role << ".\n";
         return;
     }
 
     currentUser = u;
-    if (role == "MEMBER")
-        memberMenu(dynamic_cast<Member*>(u));
-    else
-        adminMenu(dynamic_cast<Admin*>(u));
+    if (role == "MEMBER") memberMenu(dynamic_cast<Member*>(u));
+    else                  adminMenu(dynamic_cast<Admin*>(u));
 
     currentUser = nullptr;
     saveAllData();
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 // memberMenu()
-// ═════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
 void LibrarySystem::memberMenu(Member* m) {
     while (true) {
-        cout << "\n==============================\n";
-        cout << "  MEMBER DASHBOARD\n";
-        cout << "  Welcome, " << m->getFirstName() << "\n";
-        cout << "  Balance: PKR " << m->getBalance() << "\n";
-        cout << "==============================\n";
-        cout << "[1]  Browse Available Resources\n";
-        cout << "[2]  Search Resources\n";
-        cout << "[3]  Issue a Resource\n";
-        cout << "[4]  Return a Resource\n";
-        cout << "[5]  Reserve a Resource\n";
-        cout << "[6]  View Borrowing History\n";
-        cout << "[7]  View Balance\n";
-        cout << "[8]  Deposit Amount\n";
-        cout << "[9]  Write a Review\n";
-        cout << "[10] Logout\n";
-        int choice = readInt("Enter choice: ");
+        cout << YLW "\n==============================\n" RST;
+        cout << BLU "  MEMBER DASHBOARD\n" RST;
+        cout << GRN "  Welcome, " RST << m->getFirstName()
+             << GRN "  |  Balance: PKR " RST << m->getBalance() << "\n";
+        cout << YLW "==============================\n" RST;
+        cout << CYN "[1]  Browse Available Resources\n" RST;
+        cout << CYN "[2]  Search Resources\n" RST;
+        cout << CYN "[3]  Issue a Resource\n" RST;
+        cout << CYN "[4]  Return a Resource\n" RST;
+        cout << CYN "[5]  Reserve a Resource\n" RST;
+        cout << CYN "[6]  View Borrowing History\n" RST;
+        cout << CYN "[7]  View Balance\n" RST;
+        cout << CYN "[8]  Deposit Amount\n" RST;
+        cout << CYN "[9]  Write a Review\n" RST;
+        cout << CYN "[10] View My Dashboard\n" RST;
+        cout << CYN "[11] Logout\n" RST;
+        int choice = readInt(MAG "Enter choice: " RST);
 
-        if      (choice == 1)  showAvailableResources();
-        else if (choice == 2)  searchMenu(m);
+        if (choice == 1) {
+            showAvailableResources();
+        }
+        else if (choice == 2) {
+            searchMenu();
+        }
         else if (choice == 3) {
-            string isbn = readLine("Enter ISBN to issue: ");
+            cout << YLW "\nAvailable Resources:\n" RST;
+            showAvailableResources();
+            string isbn = readLine(MAG "\nEnter ISBN to issue: " RST);
             LibraryResource* r = findResource(isbn);
-            if (!r) { cout << "Resource not found.\n"; continue; }
+            if (!r) { cout << RED "Resource not found.\n" RST; continue; }
             try   { m->issueBook(r); }
             catch (const exception& e) { cout << e.what() << "\n"; }
         }
         else if (choice == 4) {
-            string isbn = readLine("Enter ISBN to return: ");
+            cout << YLW "\nYour Currently Borrowed Resources:\n" RST;
+            m->viewBorrowHistory();
+            string isbn = readLine(MAG "\nEnter ISBN to return: " RST);
             m->returnBook(isbn);
         }
         else if (choice == 5) {
-            string isbn = readLine("Enter ISBN to reserve: ");
+            cout << YLW "\nAll Resources:\n" RST;
+            showAllResources();
+            string isbn = readLine(MAG "\nEnter ISBN to reserve: " RST);
             LibraryResource* r = findResource(isbn);
-            if (!r) { cout << "Resource not found.\n"; continue; }
+            if (!r) { cout << RED "Resource not found.\n" RST; continue; }
             m->reserveBook(r);
         }
-        else if (choice == 6)  m->viewBorrowHistory();
-        else if (choice == 7)  cout << "Balance: PKR " << m->getBalance() << "\n";
+        else if (choice == 6) { m->viewBorrowHistory(); }
+        else if (choice == 7) { cout << GRN "Balance: PKR " RST << m->getBalance() << "\n"; }
         else if (choice == 8) {
-            double amount = readInt("Enter amount to deposit: PKR ");
+            double amount = readInt(MAG "Amount to deposit (PKR): " RST);
             try   { m->depositAmount(amount); }
             catch (const exception& e) { cout << e.what() << "\n"; }
         }
         else if (choice == 9) {
-            string isbn = readLine("Enter ISBN of resource to review: ");
+            string isbn = readLine(MAG "Enter ISBN of resource to review: " RST);
             LibraryResource* r = findResource(isbn);
-            if (!r) { cout << "Resource not found.\n"; continue; }
-            // Member must have borrowed this resource at least once
+            if (!r) { cout << RED "Resource not found.\n" RST; continue; }
             if (!m->findBorrowRecord(isbn)) {
-                cout << "You can only review resources you have borrowed.\n";
+                cout << RED "You can only review resources you have borrowed.\n" RST;
                 continue;
             }
-            int rating = readInt("Enter rating (1-5): ");
-            if (rating < 1 || rating > 5) { cout << "Rating must be 1-5.\n"; continue; }
-            string comment = readLine("Enter comment: ");
+            int rating = readInt(MAG "Rating (1-5): " RST);
+            if (rating < 1 || rating > 5) { cout << RED "Rating must be 1-5.\n" RST; continue; }
+            string comment = readLine(MAG "Comment: " RST);
             static int reviewCount = 0;
             r->addReview(Review("R" + to_string(++reviewCount), m->getId(), isbn, rating, comment));
-            cout << "Review submitted.\n";
+            cout << GRN "Review submitted.\n" RST;
         }
-        else if (choice == 10) { cout << "Logged out.\n"; return; }
-        else cout << "Invalid choice, try again.\n";
+        else if (choice == 10) { m->displayDashboard(); }
+        else if (choice == 11) { cout << YLW "Logged out.\n" RST; return; }
+        else cout << RED "Invalid choice.\n" RST;
     }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// searchMenu() — member search submenu
-// ═════════════════════════════════════════════════════════════════════════════
+// =============================================================================
+// searchMenu() — resource search, used by both member and admin
+// =============================================================================
 
-void LibrarySystem::searchMenu(Member* m) {
-    (void)m;
-    cout << "\nSearch by:\n";
-    cout << "[1] Title\n[2] Author/Writer\n[3] Genre\n";
-    cout << "[4] Language\n[5] Year\n[6] Keyword (all fields)\n";
-    int choice = readInt("Enter choice: ");
+void LibrarySystem::searchMenu() {
+    cout << YLW "\n--- Search Resources ---\n" RST;
+    cout << CYN "[1] Title\n" RST;
+    cout << CYN "[2] Author\n" RST;
+    cout << CYN "[3] Genre\n" RST;
+    cout << CYN "[4] Language\n" RST;
+    cout << CYN "[5] Year\n" RST;
+    cout << CYN "[6] ISBN\n" RST;
+    cout << CYN "[7] Country of Origin\n" RST;
+    cout << CYN "[8] Resource Type\n" RST;
+    cout << CYN "[9] Availability\n" RST;
+    cout << CYN "[0] Back\n" RST;
+    int choice = readInt(MAG "Enter choice: " RST);
+
+    if (choice == 0) { return; }
 
     if (choice == 1) {
-        string q = readLine("Title: ");
-        printResults(searchByTitle(q), q);
-    } else if (choice == 2) {
-        string q = readLine("Author/Writer: ");
-        printResults(searchByWriter(q), q);
-    } else if (choice == 3) {
-        string q = readLine("Genre: ");
-        printResults(searchByGenre(q), q);
-    } else if (choice == 4) {
-        string q = readLine("Language: ");
-        printResults(searchByLanguage(q), q);
-    } else if (choice == 5) {
-        int year = readInt("Year: ");
-        printResults(searchByYear(year), to_string(year));
-    } else if (choice == 6) {
-        string q = readLine("Keyword: ");
-        printResults(searchByKeyword(q), q);
-    } else {
-        cout << "Invalid choice.\n";
+        string q = readLine(MAG "Title: " RST);
+        printResourceList(searchByTitle(q), q);
     }
+    else if (choice == 2) {
+        string q = readLine(MAG "Author: " RST);
+        printResourceList(searchByWriter(q), q);
+    }
+    else if (choice == 3) {
+        string q = readLine(MAG "Genre: " RST);
+        printResourceList(searchByGenre(q), q);
+    }
+    else if (choice == 4) {
+        string q = readLine(MAG "Language: " RST);
+        printResourceList(searchByLanguage(q), q);
+    }
+    else if (choice == 5) {
+        int year = readInt(MAG "Year: " RST);
+        printResourceList(searchByYear(year), to_string(year));
+    }
+    else if (choice == 6) {
+        string q = readLine(MAG "ISBN (partial): " RST);
+        vector<LibraryResource*> res;
+        for (LibraryResource* r : resources)
+            if (contains(r->getIsbn(), q)) res.push_back(r);
+        printResourceList(res, q);
+    }
+    else if (choice == 7) {
+        string q = readLine(MAG "Country of Origin: " RST);
+        vector<LibraryResource*> res;
+        for (LibraryResource* r : resources)
+            if (contains(r->getOrigin(), q)) res.push_back(r);
+        printResourceList(res, q);
+    }
+    else if (choice == 8) {
+        cout << CYN "[1] Science  [2] Literature  [3] Magazine  [4] Reference  [5] Digital\n" RST;
+        int t = readInt(MAG "Type: " RST);
+        string types[] = {"SCIENCE", "LITERATURE", "MAGAZINE", "REFERENCE", "DIGITAL"};
+        if (t < 1 || t > 5) { cout << RED "Invalid choice.\n" RST; return; }
+        string tstr = types[t - 1];
+        vector<LibraryResource*> res;
+        for (LibraryResource* r : resources)
+            if (r->getType() == tstr) res.push_back(r);
+        printResourceList(res, tstr);
+    }
+    else if (choice == 9) {
+        cout << CYN "[1] Available only  [2] All resources\n" RST;
+        int t = readInt(MAG "Choice: " RST);
+        if (t == 1) showAvailableResources();
+        else        showAllResources();
+    }
+    else { cout << RED "Invalid choice.\n" RST; }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 // adminMenu()
-// ═════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
 void LibrarySystem::adminMenu(Admin* a) {
     while (true) {
-        cout << "\n==============================\n";
-        cout << "  ADMIN DASHBOARD\n";
-        cout << "  Logged in as: " << a->getFirstName() << "\n";
-        cout << "==============================\n";
-        cout << "[1]  Manage Members\n";
-        cout << "[2]  Manage Resources\n";
-        cout << "[3]  Process a Return\n";
-        cout << "[4]  View Overdue Dashboard\n";
-        cout << "[5]  Generate Member Report\n";
-        cout << "[6]  Generate Resource Report\n";
-        cout << "[7]  Logout\n";
-        int choice = readInt("Enter choice: ");
+        cout << YLW "\n==============================\n" RST;
+        cout << BLU "  ADMIN DASHBOARD\n" RST;
+        cout << GRN "  Logged in as: " RST << a->getFirstName() << "\n";
+        cout << YLW "==============================\n" RST;
+        cout << CYN "[1] Manage Members\n" RST;
+        cout << CYN "[2] Manage Resources\n" RST;
+        cout << CYN "[3] Process a Return\n" RST;
+        cout << CYN "[4] View Overdue Dashboard\n" RST;
+        cout << CYN "[5] Generate Member Report\n" RST;
+        cout << CYN "[6] Generate Resource Report\n" RST;
+        cout << CYN "[7] Manage Reviews\n" RST;
+        cout << CYN "[8] View My Dashboard\n" RST;
+        cout << CYN "[9] Logout\n" RST;
+        int choice = readInt(MAG "Enter choice: " RST);
 
-        if      (choice == 1) manageMembersMenu(a);
-        else if (choice == 2) manageResourcesMenu(a);
+        if      (choice == 1) manageMembersMenu();
+        else if (choice == 2) manageResourcesMenu();
         else if (choice == 3) processReturnFlow(a);
         else if (choice == 4) viewOverdueFlow();
         else if (choice == 5) {
-            a->generateMemberReport(getAllMembers(), "data/member_report.txt");
+            cout << CYN "[1] By ID  [2] By Name  [3] All Members\n" RST;
+            int sc = readInt(MAG "Choice: " RST);
+            vector<Member*> targets;
+            if (sc == 1) {
+                string id = readLine(MAG "Member ID: " RST);
+                Member* m = dynamic_cast<Member*>(findUser(id));
+                if (!m) { cout << RED "Member not found.\n" RST; }
+                else targets.push_back(m);
+            } else if (sc == 2) {
+                string q = readLine(MAG "Name (full or partial): " RST);
+                for (Member* m : getAllMembers())
+                    if (contains(m->getFirstName() + " " + m->getLastName(), q))
+                        targets.push_back(m);
+                if (targets.empty()) cout << RED "No matching members found.\n" RST;
+            } else {
+                targets = getAllMembers();
+            }
+            if (!targets.empty()) a->generateMemberReport(targets, "");
+        }
+        else if (choice == 6) a->generateResourceReport(getAllResources(), getAllMembers(), "data/resource_report.txt");
+        else if (choice == 7) reviewsMenu();
+        else if (choice == 8) { a->displayDashboard(); }
+        else if (choice == 9) { cout << GRN "Logged out.\n" RST; return; }
+        else cout << RED "Invalid choice.\n" RST;
+    }
+}
+
+// =============================================================================
+// manageMembersMenu()
+// =============================================================================
+
+void LibrarySystem::manageMembersMenu() {
+    while (true) {
+        cout << YLW "\n--- Manage Members ---\n" RST;
+        cout << CYN "[1] Add Member\n" RST;
+        cout << CYN "[2] Remove Member\n" RST;
+        cout << CYN "[3] View Member Details\n" RST;
+        cout << CYN "[4] Search Members\n" RST;
+        cout << CYN "[5] View Borrow History\n" RST;
+        cout << CYN "[6] Display All Members\n" RST;
+        cout << CYN "[7] Update Member Status\n" RST;
+        cout << CYN "[8] Back\n" RST;
+        int choice = readInt(MAG "Enter choice: " RST);
+
+        if (choice == 1) {
+            string id    = readLine(MAG "Member ID   : " RST);
+            string first = readLine(MAG "First Name  : " RST);
+            string last  = readLine(MAG "Last Name   : " RST);
+            string pass  = readLine(MAG "Password    : " RST);
+            string email = readEmail(MAG "Email       : " RST);
+            string addr  = readLine(MAG "Address     : " RST);
+            double bal   = readInt(MAG "Balance(PKR): " RST);
+            Member* m = new Member(id, first, last, pass, email, addr);
+            m->setBalance(bal);
+            if (addUser(m)) cout << GRN "Member added.\n" RST;
+        }
+        else if (choice == 2) {
+            string id = readLine(MAG "Member ID to remove: " RST);
+            Member* m = dynamic_cast<Member*>(findUser(id));
+            if (!m) { cout << RED "Member not found.\n" RST; continue; }
+            showMemberDetails(m);
+            int active = 0;
+            for (BorrowRecord* r : m->getBorrowedBooks())
+                if (!r->getIsReturned()) active++;
+            if (active > 0)
+                cout << RED "Warning: member has " RST << active << RED " active borrow(s).\n" RST;
+            cout << MAG "Confirm removal? [Y/N]: " RST;
+            string ans; getline(cin, ans);
+            if (ans != "Y" && ans != "y") { cout << GRN "Removal cancelled.\n" RST; continue; }
+            else
+            cout<<"Member removed successfully!"<<endl;
+            removeUser(id);
+        }
+        else if (choice == 3) {
+            string id = readLine(MAG "Member ID: " RST);
+            Member* m = dynamic_cast<Member*>(findUser(id));
+            if (!m) { cout << RED "Member not found.\n" RST; continue; }
+            showMemberDetails(m);
+        }
+        else if (choice == 4) {
+            adminMemberSearch();
+        }
+        else if (choice == 5) {
+            string id = readLine(MAG "Member ID: " RST);
+            Member* m = dynamic_cast<Member*>(findUser(id));
+            if (!m) { cout << RED "Member not found.\n" RST; continue; }
+            m->viewBorrowHistory();
         }
         else if (choice == 6) {
-            a->generateResourceReport(getAllResources(), getAllMembers(), "data/resource_report.txt");
+            displayAllUsers();
         }
-        else if (choice == 7) { cout << "Logged out.\n"; return; }
-        else cout << "Invalid choice, try again.\n";
+        else if (choice == 7) {
+            string id = readLine(MAG "Member ID: " RST);
+            Member* m = dynamic_cast<Member*>(findUser(id));
+            if (!m) { cout << RED "Member not found.\n" RST; continue; }
+            cout << BLU "Current status: " RST << (m->getStatus() == STANDARD ? "STANDARD" :
+                                                    m->getStatus() == PREMIUM  ? "PREMIUM"  : "ELITE") << "\n";
+            cout << CYN "[1] Standard  [2] Premium  [3] Elite\n" RST;
+            int sc = readInt(MAG "New status: " RST);
+            if      (sc == 1) { m->setStatus(STANDARD); cout << GRN "Status set to STANDARD.\n" RST; }
+            else if (sc == 2) { m->setStatus(PREMIUM);  cout << GRN "Status set to PREMIUM.\n"  RST; }
+            else if (sc == 3) { m->setStatus(ELITE);    cout << GRN "Status set to ELITE.\n"    RST; }
+            else cout << RED "Invalid choice.\n" RST;
+        }
+        else if (choice == 8) { return; }
+        else cout << RED "Invalid choice.\n" RST;
     }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// manageMembersMenu()
-// ═════════════════════════════════════════════════════════════════════════════
+// =============================================================================
+// adminMemberSearch() — search members by ID, name, or email
+// =============================================================================
 
-void LibrarySystem::manageMembersMenu(Admin* a) {
-    (void)a;
-    cout << "\n[1] Add Member  [2] Remove Member\n";
-    cout << "[3] View Member Borrow History  [4] Display All Members\n";
-    int choice = readInt("Enter choice: ");
+void LibrarySystem::adminMemberSearch() {
+    cout << YLW "\n--- Search Members ---\n" RST;
+    cout << CYN "[1] By ID\n[2] By Name\n[3] By Email\n[0] Back\n" RST;
+    int sc = readInt(MAG "Choice: " RST);
+    if (sc == 0) return;
 
-    if (choice == 1) {
-        string id    = readLine("Member ID: ");
-        string first = readLine("First Name: ");
-        string last  = readLine("Last Name: ");
-        string pass  = readLine("Password: ");
-        string email = readLine("Email: ");
-        string addr  = readLine("Address: ");
-        double bal   = readInt("Initial Balance (PKR): ");
-        Member* m = new Member(id, first, last, pass, email, addr);
-        m->setBalance(bal);
-        if (addUser(m)) cout << "Member added.\n";
+    if (sc == 1) {
+        string q = readLine(MAG "Member ID: " RST);
+        Member* m = dynamic_cast<Member*>(findUser(q));
+        if (m) showMemberDetails(m);
+        else   cout << RED "No member found with that ID.\n" RST;
     }
-    else if (choice == 2) {
-        string id = readLine("Member ID to remove: ");
-        Member* m = dynamic_cast<Member*>(findUser(id));
-        if (!m) { cout << "Member not found.\n"; return; }
-        // Warn if member has active borrows
-        int active = 0;
-        for (BorrowRecord* r : m->getBorrowedBooks())
-            if (!r->getIsReturned()) active++;
-        if (active > 0) {
-            cout << "Member has " << active << " active borrow(s). Confirm removal? [Y/N]: ";
-            string ans; getline(cin, ans);
-            if (ans != "Y" && ans != "y") { cout << "Removal cancelled.\n"; return; }
+    else if (sc == 2) {
+        string q = readLine(MAG "Name (full or partial): " RST);
+        bool found = false;
+        for (Member* m : getAllMembers()) {
+            if (contains(m->getFirstName() + " " + m->getLastName(), q)) {
+                showMemberDetails(m);
+                found = true;
+            }
         }
-        removeUser(id);
-        cout << "Member removed.\n";
+        if (!found) cout << RED "No member found with that name.\n" RST;
     }
-    else if (choice == 3) {
-        string id = readLine("Member ID: ");
-        Member* m = dynamic_cast<Member*>(findUser(id));
-        if (!m) { cout << "Member not found.\n"; return; }
-        m->viewBorrowHistory();
+    else if (sc == 3) {
+        string q = readLine(MAG "Email (partial): " RST);
+        bool found = false;
+        for (Member* m : getAllMembers()) {
+            if (contains(m->getEmail(), q)) {
+                showMemberDetails(m);
+                found = true;
+            }
+        }
+        if (!found) cout << RED "No member found with that email.\n" RST;
     }
-    else if (choice == 4) {
-        displayAllUsers();
-    }
-    else cout << "Invalid choice.\n";
+    else { cout << RED "Invalid choice.\n" RST; }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 // manageResourcesMenu()
-// ═════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
-void LibrarySystem::manageResourcesMenu(Admin* a) {
-    (void)a;
-    cout << "\n[1] Add Resource  [2] Remove Resource\n";
-    cout << "[3] Edit Resource Availability  [4] Show Available Resources\n";
-    int choice = readInt("Enter choice: ");
+void LibrarySystem::manageResourcesMenu() {
+    while (true) {
+        cout << YLW "\n--- Manage Resources ---\n" RST;
+        cout << CYN "[1] Add Resource\n" RST;
+        cout << CYN "[2] Remove Resource\n" RST;
+        cout << CYN "[3] Toggle Availability\n" RST;
+        cout << CYN "[4] Show All Resources\n" RST;
+        cout << CYN "[5] Search Resources\n" RST;
+        cout << CYN "[6] View Resource Details\n" RST;
+        cout << CYN "[7] Back\n" RST;
+        int choice = readInt(MAG "Enter choice: " RST);
 
-    if (choice == 1) {
-        LibraryResource* r = promptNewResource();
-        if (r && addResource(r)) cout << "Resource added.\n";
+        if (choice == 1) {
+            LibraryResource* r = promptNewResource();
+            if (r && addResource(r)) cout << GRN "Resource added.\n" RST;
+        }
+        else if (choice == 2) {
+            string isbn = readLine(MAG "ISBN to remove: " RST);
+            LibraryResource* r = findResource(isbn);
+            if (!r) { cout << RED "Resource not found.\n" RST; continue; }
+            if (!r->isAvailable()) {
+                cout << RED "Cannot remove \"" RST << r->getTitle()
+                     << RED "\" - it is currently issued.\n" RST;
+                continue;
+            }
+            showResourceDetails(r);
+            cout << MAG "Confirm removal? [Y/N]: " RST;
+            string ans; getline(cin, ans);
+            if (ans != "Y" && ans != "y") { cout << GRN "Removal cancelled.\n" RST; continue; }
+            removeResource(isbn);
+        }
+        else if (choice == 3) {
+            string isbn = readLine(MAG "ISBN: " RST);
+            LibraryResource* r = findResource(isbn);
+            if (!r) { cout << RED "Resource not found.\n" RST; continue; }
+            r->setAvailable(!r->isAvailable());
+            cout << (r->isAvailable() ? GRN "Now: Available\n" RST : YLW "Now: Unavailable\n" RST);
+        }
+        else if (choice == 4) { showAllResources(); }
+        else if (choice == 5) { searchMenu(); }
+        else if (choice == 6) {
+            string isbn = readLine(MAG "ISBN: " RST);
+            LibraryResource* r = findResource(isbn);
+            if (!r) { cout << RED "Resource not found.\n" RST; continue; }
+            showResourceDetails(r);
+        }
+        else if (choice == 7) { return; }
+        else cout << RED "Invalid choice.\n" RST;
     }
-    else if (choice == 2) {
-        string isbn = readLine("ISBN to remove: ");
-        removeResource(isbn);
-    }
-    else if (choice == 3) {
-        string isbn = readLine("ISBN: ");
-        LibraryResource* r = findResource(isbn);
-        if (!r) { cout << "Resource not found.\n"; return; }
-        r->setAvailable(!r->isAvailable());
-        cout << "Availability set to: " << (r->isAvailable() ? "Available" : "Unavailable") << "\n";
-    }
-    else if (choice == 4) showAvailableResources();
-    else cout << "Invalid choice.\n";
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// promptNewResource() — reads all fields from the user and returns a new resource
-// ═════════════════════════════════════════════════════════════════════════════
+// =============================================================================
+// promptNewResource() — asks for fields and returns a new resource object
+// Category is auto-assigned based on resource type (no need to ask separately)
+// =============================================================================
 
 LibraryResource* LibrarySystem::promptNewResource() {
-    cout << "\nResource type?\n";
-    cout << "[1] Science Book  [2] Literature Book  [3] Magazine\n";
-    cout << "[4] Reference Book  [5] Digital Media\n";
-    int type = readInt("Enter choice: ");
-    if (type < 1 || type > 5) { cout << "Invalid type.\n"; return nullptr; }
+    cout << YLW "\n--- Resource Type ---\n" RST;
+    cout << CYN "[1] Science Book\n[2] Literature Book\n[3] Magazine\n" RST;
+    cout << CYN "[4] Reference Book\n[5] Digital Media\n[0] Cancel\n" RST;
+    int type = readInt(MAG "Enter choice: " RST);
+    if (type == 0) return nullptr;
+    if (type < 1 || type > 5) { cout << RED "Invalid type.\n" RST; return nullptr; }
 
-    // Common fields
-    string isbn   = readLine("ISBN: ");
-    string title  = readLine("Title: ");
-    string writer = readLine("Author/Writer: ");
-    int    year   = readInt("Publication Year: ");
-    string origin = readLine("Origin (country): ");
-    string lang   = readLine("Language: ");
-    string genre  = readLine("Genre: ");
-    cout << "Category — [1] Fiction  [2] Non-Fiction: ";
-    int catChoice = readInt("");
-    BookCategory cat = (catChoice == 1) ? BookCategory::FICTION : BookCategory::NON_FICTION;
+    BookCategory cat = (type == 2) ? BookCategory::FICTION : BookCategory::NON_FICTION;
+
+    // Helper: re-prompts until a non-empty, non-whitespace string is entered
+    auto readField = [&](const string& prompt) -> string {
+        while (true) {
+            string val = readLine(prompt);
+            if (val.empty()) { cout << RED "This field cannot be empty. Try again.\n" RST; continue; }
+            bool allSpaces = true;
+            for (char c : val) if (c != ' ') { allSpaces = false; break; }
+            if (allSpaces) { cout << RED "This field cannot be only spaces. Try again.\n" RST; continue; }
+            return val;
+        }
+    };
+
+    // ISBN — re-prompt until 13 digits and not already registered
+    string isbn;
+    while (true) {
+        isbn = readLine(MAG "ISBN             : " RST);
+        if (isbn.size() != 13) {
+            cout << RED "ISBN must be exactly 13 digits. You entered " << isbn.size() << ". Try again.\n" RST;
+            continue;
+        }
+        bool allDigits = true;
+        for (char c : isbn) if (c < '0' || c > '9') { allDigits = false; break; }
+        if (!allDigits) { cout << RED "ISBN must contain digits only. Try again.\n" RST; continue; }
+        LibraryResource* existing = findResource(isbn);
+        if (existing) {
+            cout << RED "ISBN already registered to: " RST << "\"" << existing->getTitle() << "\" — use a different ISBN.\n";
+            continue;
+        }
+        break;
+    }
+
+    string title  = readField(MAG "Title            : " RST);
+    string writer = readField(MAG "Author/Writer    : " RST);
+
+    // Year — re-prompt until in valid range
+    int year;
+    while (true) {
+        year = readInt(MAG "Publication Year : " RST);
+        if (year >= 1000 && year <= 2026) break;
+        cout << RED "Year must be between 1000 and 2026. Try again.\n" RST;
+    }
+
+    string origin = readField(MAG "Country of Origin: " RST);
+    string lang   = readField(MAG "Language         : " RST);
+    string genre  = readLine(MAG  "Genre            : " RST);
 
     if (type == 1) {
-        string field = readLine("Scientific Field: ");
+        string field = readLine(MAG "Scientific Field : " RST);
         return new ScienceBook(isbn, title, writer, year, origin, lang, genre, cat, field);
     }
     if (type == 2) {
-        string era = readLine("Literary Era: ");
+        string era = readLine(MAG "Literary Era     : " RST);
         return new LiteratureBook(isbn, title, writer, year, origin, lang, genre, cat, era);
     }
     if (type == 3) {
-        int    issue = readInt("Issue Number: ");
-        string month = readLine("Publication Month: ");
+        int    issue = readInt(MAG  "Issue Number     : " RST);
+        string month = readLine(MAG "Publication Month: " RST);
         return new Magazine(isbn, title, writer, year, origin, lang, genre, cat, issue, month);
     }
     if (type == 4) {
-        int edition = readInt("Edition: ");
+        int edition = readInt(MAG "Edition          : " RST);
         return new ReferenceBook(isbn, title, writer, year, origin, lang, genre, cat, edition);
     }
-    // type == 5
-    float  runtime = (float)readInt("Runtime (minutes): ");
-    string format  = readLine("File Format (e.g. MP4): ");
+    float  runtime = (float)readInt(MAG "Runtime (minutes): " RST);
+    string format  = readLine(MAG "File Format      : " RST);
     return new DigitalMedia(isbn, title, writer, year, origin, lang, genre, cat, runtime, format);
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 // processReturnFlow()
-// ═════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
 void LibrarySystem::processReturnFlow(Admin* a) {
-    string mid  = readLine("Enter Member ID: ");
+    string mid = readLine(MAG "Member ID: " RST);
     Member* m = dynamic_cast<Member*>(findUser(mid));
-    if (!m) { cout << "Member not found.\n"; return; }
+    if (!m) { cout << RED "Member not found.\n" RST; return; }
 
-    string isbn = readLine("Enter Resource ISBN: ");
+    string isbn = readLine(MAG "Resource ISBN: " RST);
 
-    // Try active borrow first; if already returned by member, find any record
     BorrowRecord* rec = m->findActiveBorrow(isbn);
     bool alreadyReturned = false;
-    if (!rec) {
-        rec = m->findBorrowRecord(isbn);
-        alreadyReturned = true;
-    }
-    if (!rec) { cout << "No borrow record found for ISBN " << isbn << ".\n"; return; }
+    if (!rec) { rec = m->findBorrowRecord(isbn); alreadyReturned = true; }
+    if (!rec) { cout << RED "No borrow record found for ISBN " RST << isbn << ".\n"; return; }
     if (alreadyReturned && rec->getResource()->isAvailable()) {
-        cout << "This resource has already been fully processed.\n"; return;
+        cout << YLW "This resource has already been fully processed.\n" RST;
+        return;
     }
 
-    // Show borrow details
-    cout << "\nResource : \"" << rec->getResource()->getTitle() << "\"\n";
+    cout << BLU "\nResource : " RST << rec->getResource()->getTitle() << "\n";
     time_t issued = rec->getIssueDate();
-    cout << "Issued   : " << ctime(&issued);
+    cout << BLU "Issued   : " RST << ctime(&issued);
     int lateDays = rec->calculateLateDays(time(nullptr));
-    cout << "Overdue  : " << lateDays << " day(s)\n";
+    cout << BLU "Overdue  : " RST << lateDays << " day(s)\n";
 
-    // Select condition
-    cout << "\nCondition?\n";
-    cout << "[1] Perfect  [2] Minor Damage  [3] Heavy Damage  [4] Lost\n";
-    int c = readInt("Enter choice: ");
-    if (c < 1 || c > 4) { cout << "Invalid choice.\n"; return; }
+    cout << YLW "\nCondition?\n" RST;
+    cout << CYN "[1] Perfect  [2] Minor Damage  [3] Heavy Damage  [4] Lost\n" RST;
+    int c = readInt(MAG "Enter choice: " RST);
+    if (c < 1 || c > 4) { cout << RED "Invalid choice.\n" RST; return; }
     BookCondition cond = static_cast<BookCondition>(c - 1);
 
-    // Mark returned if the member hasn't done so yet
     if (!alreadyReturned) m->returnBook(isbn);
-
     a->processReturn(*m, rec, cond, time(nullptr));
-    cout << "Updated balance: PKR " << m->getBalance() << "\n";
+    cout << GRN "Updated balance: PKR " RST << m->getBalance() << "\n";
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 // viewOverdueFlow()
-// ═════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
 void LibrarySystem::viewOverdueFlow() const {
     time_t now = time(nullptr);
     bool found = false;
-    cout << "\n=== OVERDUE RESOURCES ===\n";
+    cout << YLW "\n=== OVERDUE RESOURCES ===\n" RST;
     for (Member* m : getAllMembers()) {
         for (BorrowRecord* r : m->getBorrowedBooks()) {
             if (!r->getIsReturned() && r->getDueDate() < now) {
                 int days = r->calculateLateDays(now);
                 double est = FineUtility::calculateFine(days, BookCondition::PERFECT);
-                cout << "Member: " << m->getFirstName() << " " << m->getLastName()
+                cout << BLU "Member: " RST << m->getFirstName() << " " << m->getLastName()
                      << " (" << m->getId() << ")\n";
                 cout << "  \"" << r->getResource()->getTitle()
-                     << "\" — overdue by " << days
-                     << " day(s) | Est. fine: PKR " << est << "\n";
+                     << "\" - overdue by " << RED << days << RST << " day(s)"
+                     << " | Est. fine: " << RED "PKR " RST << est << "\n";
                 found = true;
             }
         }
     }
-    if (!found) cout << "No overdue resources.\n";
+    if (!found) cout << GRN "No overdue resources.\n" RST;
+}
+
+// =============================================================================
+// reviewsMenu() — admin approves or rejects pending member reviews
+// =============================================================================
+
+void LibrarySystem::reviewsMenu() {
+    // collect all pending reviews across every resource
+    vector<pair<LibraryResource*, int>> pending; // resource + index in its review list
+    for (LibraryResource* r : resources) {
+        const auto& revs = r->getReviews();
+        for (int i = 0; i < (int)revs.size(); i++)
+            if (!revs[i].isApproved())
+                pending.push_back({r, i});
+    }
+
+    if (pending.empty()) {
+        cout << GRN "No pending reviews.\n" RST;
+        return;
+    }
+
+    cout << YLW "\n=== Pending Reviews ===\n" RST;
+    for (int i = 0; i < (int)pending.size(); i++) {
+        LibraryResource* r  = pending[i].first;
+        const Review&    rv = r->getReviews()[pending[i].second];
+        cout << YLW "\n[" << i + 1 << "] " RST
+             << "\"" << r->getTitle() << "\" (ISBN: " << r->getIsbn() << ")\n"
+             << CYN "    Member  : " RST << rv.getMemberID() << "\n"
+             << CYN "    Rating  : " RST << rv.getRating() << "/5\n"
+             << CYN "    Comment : " RST << rv.getComment() << "\n"
+             << MAG "    [1] Approve  [2] Reject  [3] Skip\n" RST;
+
+        int choice = readInt(MAG "    Choice: " RST);
+        if (choice == 1) {
+            r->approveReview(rv.getReviewID());
+            cout << GRN "    Review approved.\n" RST;
+        } else if (choice == 2) {
+            r->rejectReview(rv.getReviewID());
+            cout << RED "    Review rejected.\n" RST;
+        } else {
+            cout << YLW "    Skipped.\n" RST;
+        }
+    }
+    cout << YLW "\n=== Done ===\n" RST;
 }
